@@ -186,7 +186,8 @@ function renderHome(){
    '<section class="panel"><div class="tabs" role="tablist">'+['bookmarks','notes','highlights'].map(k=>'<button role="tab" data-act="tab" data-v="'+k+'" class="'+(H.tab===k?'on':'')+'">'+k[0].toUpperCase()+k.slice(1)+' ('+savedItems(k).length+')</button>').join('')+'</div>'+listHTML(H.tab,3)+'</section>'+
    '<div class="browse-head"><div class="seg" role="group" aria-label="Browse by"><button data-act="browse" data-v="main" class="'+(H.browse==='main'?'on':'')+'">Main headings</button><button data-act="browse" data-v="sub" class="'+(H.browse==='sub'?'on':'')+'">Sub-headings</button></div>'+
    (H.browse==='sub'?'<div class="tools"><div class="chips" role="group" aria-label="Show">'+[['all','All'],['unread','Not finished'],['done','Completed']].map(([v,l])=>'<button data-act="show" data-v="'+v+'" class="'+(H.show===v?'on':'')+'" aria-pressed="'+(H.show===v)+'">'+l+'</button>').join('')+'</div><button class="btn small ghost" data-act="all">'+ic('layers')+'Open or close all</button></div>':'')+'</div>'+
-   (H.browse==='sub'?'<input class="field ur" id="filter" style="width:100%;margin-bottom:12px" placeholder="عنوان تلاش کریں" value="'+esc(H.filter)+'" aria-label="Filter sub-headings">':'')+'<div id="browse">'+browseHTML()+'</div>';
+   (H.browse==='sub'?'<input class="field ur" id="filter" style="width:100%;margin-bottom:12px" placeholder="عنوان تلاش کریں" value="'+esc(H.filter)+'" aria-label="Filter sub-headings">':'')+'<div id="browse">'+browseHTML()+'</div>'+
+   '<p class="note-text" style="margin-top:28px;text-align:center">This text has not yet been proofread by a scholar. Please check Quran verses and duas against a reliable copy. Original pages 716 and 717 are missing.</p>';
   const f=$('#filter');if(f)f.oninput=()=>{H.filter=f.value;$('#browse').innerHTML=browseHTML()};
 }
 

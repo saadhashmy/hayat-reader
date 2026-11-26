@@ -25,8 +25,7 @@ The OAuth Client ID is in `config.js`. A Client ID is public. Never commit a cli
 | `art.js` | Original illustrations |
 | `data/` | The book text and contents |
 
-## Before making the book public
+## About the text
 
-- The text has not been proofread by a scholar. Check Quran verses and duas against reliable copies.
+- It has not yet been proofread by a scholar. Check Quran verses and duas against reliable copies.
 - Original pages 716 and 717 are missing from the source scan.
-- Get permission for the Urdu translation, and for footnotes taken from the English edition.
