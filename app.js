@@ -29,15 +29,27 @@ function loadChapter(n){
 
 /* ---------- saved reading state ---------- */
 const KEY='hs3-reader-v1', SETKEY=KEY+'-settings', ACCKEY=KEY+'-account';
-const DRIVE=window.HSDrive, IN_CLAUDE=!!(window.claude&&window.claude.use);
+const ACCOUNTS=window.HSAccount, IN_CLAUDE=!!(window.claude&&window.claude.use);
 const readJSON=k=>{try{return JSON.parse(localStorage.getItem(k))}catch(e){return null}};
 let account=IN_CLAUDE?null:readJSON(ACCKEY);
 if(account&&!(account.sub&&account.email))account=null;
+let legacyKey=null;
+if(account&&account.kind!=='pin'){legacyKey=KEY+':'+account.sub;account=null}
 const dataKey=()=>account?KEY+':'+account.sub:KEY;
 let S={t:{},last:null,set:{size:19,fn:true,theme:'auto',color:'y',marker:false,goal:3}};
 Object.assign(S.set,(readJSON(KEY)||{}).set||{},readJSON(SETKEY)||{});
 function loadData(){const v=readJSON(dataKey());S.t=v&&v.t?v.t:{};S.last=v&&v.last?v.last:null}
 loadData();
+/* move reading data from the old sign-in to this device, once, without overwriting anything */
+if(legacyKey){try{
+  const old=readJSON(legacyKey),guest=readJSON(KEY)||{};
+  if(old&&old.t){
+    const t=Object.assign({},old.t,guest.t||{});
+    for(const id in old.t){if(guest.t&&guest.t[id]&&(+old.t[id].u||0)>(+guest.t[id].u||0))t[id]=old.t[id]}
+    localStorage.setItem(KEY,JSON.stringify({t,last:guest.last||old.last||null}));loadData();
+  }
+  localStorage.removeItem(ACCKEY);
+}catch(e){}}
 let storageOK=true;
 function saveLocal(){try{localStorage.setItem(dataKey(),JSON.stringify({t:S.t,last:S.last}));localStorage.setItem(SETKEY,JSON.stringify(S.set));storageOK=true}catch(e){if(storageOK)toast('This browser is not saving. Use Settings \u2192 Export backup.');storageOK=false}}
 const blank=()=>({u:0,done:{},bm:{},hl:{},nt:{}});
@@ -361,6 +373,8 @@ function openSheet(title,body,cls){
   layer.innerHTML='<div class="veil" data-act="veil"><div class="sheet'+(cls?' '+cls:'')+'" role="dialog" aria-modal="true" aria-label="'+esc(title)+'"><header><h2>'+esc(title)+'</h2><button class="act" data-act="close" aria-label="Close">'+ic('x')+'</button></header>'+body+'</div></div>';
 }
 const closeSheet=()=>{layer.innerHTML=''};
+/* the recovery code window closes only with its own button */
+const codeOpen=()=>!!(codeWait&&$('#reccode'));
 let noteCtx=null;
 function noteSheet(s,a,b,id){
   const tid=R.topic.id,n=id?(peek(tid).nt[s]||[]).find(x=>x.id===id):null;
@@ -394,7 +408,7 @@ function settingsSheet(){
    '<div class="setrow"><span>References</span>'+seg('fn',S.set.fn?1:0,[[1,'Show'],[0,'Hide']])+'</div>'+
    '<div class="setrow"><span>Theme</span>'+seg('theme',S.set.theme,[['auto','Auto'],['light','Light'],['dark','Dark']])+'</div>'+
    '<div class="setrow"><span>Backup of progress and notes</span><span class="row"><button class="btn small" data-act="export">Export backup</button><label class="btn small" for="imp">Import</label><input type="file" id="imp" accept=".json,application/json" hidden></span></div>'+
-   '<p class="note-text">'+esc(IN_CLAUDE?Sync.status:account?'Signed in as '+account.email+'. Erasing also erases the copy in Google Drive.':'Saved in this browser only.')+'</p>'+
+   '<p class="note-text">'+esc(IN_CLAUDE?Sync.status:account?'Signed in as '+account.email+'. Erasing also erases the copy saved in your account.':'Saved in this browser only.')+'</p>'+
    '<div class="setrow" style="border:0;justify-content:flex-end"><button class="btn small" data-act="reset">Erase my reading data</button></div>');
   $('#size').oninput=e=>{S.set.size=+e.target.value;applySettings();saveLocal()};
   $('#imp').onchange=e=>importFile(e.target.files[0]);
@@ -442,8 +456,8 @@ function importFile(f){
   fr.readAsText(f);
 }
 
-/* ---------- reading profile and Google Drive ---------- */
-const DS={generation:0,running:null,again:false,timer:null,due:0,state:'idle',at:0,
+/* ---------- reading profile and account sync ---------- */
+const DS={clashes:0,generation:0,running:null,again:false,timer:null,due:0,state:'idle',at:0,
   /* newer change to a sub-heading wins */
   take(remote){
     let changed=false;
@@ -458,28 +472,31 @@ const DS={generation:0,running:null,again:false,timer:null,due:0,state:'idle',at
     return Object.keys(S.t).some(t=>(S.t[t].u||0)>(+(remote.t[t]||{}).u||0))||((S.last&&S.last.at)||0)>((remote.last&&+remote.last.at)||0);
   },
   changed(delay){
-    if(!account||!DRIVE||!DRIVE.isFor(account.sub))return;
+    if(!account||!ACCOUNTS.isFor(account.sub))return;
     const due=Date.now()+(delay||2500);
     if(this.timer&&this.due<=due)return;
     clearTimeout(this.timer);this.due=due;this.timer=setTimeout(()=>{this.timer=null;this.sync()},due-Date.now());
   },
   sync(){
     if(!account)return Promise.resolve(false);
-    if(!DRIVE.isFor(account.sub)){this.set('reconnect');return Promise.resolve(false)}
+    if(!ACCOUNTS.isFor(account.sub)){this.set('reconnect');return Promise.resolve(false)}
     if(this.running){this.again=true;return this.running}
     const gen=this.generation;this.set('syncing');
     this.running=(async()=>{
       try{
-        const remote=await DRIVE.read();
+        const remote=await ACCOUNTS.read();
         if(gen!==this.generation)return false;
         if(this.take(remote)){saveLocal();refresh()}
         if(this.ahead(remote)){
-          await DRIVE.write({app:KEY,t:S.t,last:S.last});
+          await ACCOUNTS.write({app:KEY,t:S.t,last:S.last});
           if(gen!==this.generation)return false;
         }
-        this.at=Date.now();this.set('ok');return true;
+        this.clashes=0;this.at=Date.now();this.set('ok');return true;
       }catch(e){
-        if(gen===this.generation)this.set(e.code==='auth'?'reconnect':e.code==='denied'?'denied':'error');
+        if(gen!==this.generation)return false;
+        /* another device saved in between: read again, join the changes, then save */
+        if(e.code==='conflict'&&++this.clashes<5){this.again=true;return false}
+        this.set(e.code==='auth'?'reconnect':e.code==='toobig'?'toobig':'error');
         return false;
       }
     })().then(ok=>{this.running=null;if(this.again){this.again=false;this.changed(800)}return ok});
@@ -487,11 +504,11 @@ const DS={generation:0,running:null,again:false,timer:null,due:0,state:'idle',at
   },
   set(state){this.state=state;paintMe();const el=$('#syncline');if(el)el.textContent=this.text()},
   text(){
-    return {idle:'Not synced yet.',syncing:'Saving to your Google Drive…',
-      ok:'Saved to your Google Drive at '+new Date(this.at).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})+'.',
-      reconnect:'Google sign-in has expired. Changes are kept on this device. Reconnect to save them to Drive.',
-      denied:'Google Drive refused the request. Changes are kept on this device.',
-      error:'Google Drive could not be reached. Changes are kept on this device and will be tried again.'}[this.state];
+    return {idle:'Not synced yet.',syncing:'Saving to your account…',
+      ok:'Saved to your account at '+new Date(this.at).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})+'.',
+      reconnect:'Your sign-in has ended. Changes are kept on this device. Sign in again to save them.',
+      toobig:'Your notes and highlights are too large to save to your account. They are kept on this device.',
+      error:'The account server could not be reached. Changes are kept on this device and will be tried again.'}[this.state];
   }
 };
 let CLAUDE_ME=null;
@@ -503,7 +520,7 @@ function avatar(p,big){
 function meInner(){
   const p=person();
   if(p)return avatar(p)+'<span>'+esc((p.name||p.email).split(/\s+/)[0])+'</span>';
-  return '<span>'+(IN_CLAUDE?'Profile':'Sign in')+'</span>';
+  return '<span>'+(ACCOUNTS.configured()?'Sign in':'Profile')+'</span>';
 }
 const meButton=()=>'<button class="me'+(person()?'':' plain')+'" data-act="account" aria-label="Reading profile">'+meInner()+'</button>';
 function paintMe(){$$('.me').forEach(b=>{b.classList.toggle('plain',!person());b.innerHTML=meInner()})}
@@ -512,21 +529,89 @@ function statsHTML(){
 }
 function accountSheet(){
   const p=person();
+  if(!IN_CLAUDE&&!account&&ACCOUNTS.configured()){authSheet('register');return}
   const head=(title,sub)=>'<div class="profile">'+avatar(p,true)+'<div><b>'+esc(title)+'</b><small>'+esc(sub)+'</small></div></div>';
   let body;
   if(IN_CLAUDE){
     body=head(p?p.name:'Your reading profile',p?(p.email||'Signed in through Claude'):'Signed in through Claude')+statsHTML()+'<p class="note-text">'+esc(Sync.status)+'</p>';
   }else if(account){
-    body=head(account.name,account.email)+statsHTML()+'<p class="note-text" id="syncline" role="status">'+esc(DS.text())+'</p><div class="row" style="flex-wrap:wrap">'+
-      (DRIVE.isFor(account.sub)?'<button class="btn primary" data-act="syncnow">Sync now</button>':'<button class="btn primary" data-act="signin">Reconnect to Google</button>')+
-      '<button class="btn" data-act="signout">Sign out</button><button class="btn" data-act="signoutwipe">Sign out and remove from this device</button></div>';
+    const live=ACCOUNTS.configured()&&ACCOUNTS.isFor(account.sub);
+    body=head(account.name,account.email)+statsHTML()+'<p class="note-text" id="syncline" role="status">'+esc(live?DS.text():'Your sign-in has ended. Changes are kept on this device.')+'</p><div class="row" style="flex-wrap:wrap">'+
+      (live?'<button class="btn primary" data-act="syncnow">Sync now</button>':ACCOUNTS.configured()?'<button class="btn primary" data-act="auth" data-v="signin">Sign in again</button>':'')+
+      '<button class="btn" data-act="signout">Sign out</button><button class="btn" data-act="signoutwipe">Sign out and remove from this device</button>'+
+      (live?'<button class="btn" data-act="askdelete">Delete my account</button>':'')+'</div>';
   }else{
-    const ready=DRIVE.configured()&&DRIVE.supported();
-    body=head('Reading as a guest','Saved in this browser only')+statsHTML()+
-      (ready?'<button class="btn primary" data-act="signin">Sign in with Google</button><p class="note-text">Each email gets its own reading profile. Progress, bookmarks, highlights and notes are saved in a private app folder in that person’s Google Drive. This site cannot see their other Drive files, and it never sees a password.</p>'
-        :'<button class="btn" disabled aria-describedby="why">Sign in with Google (not set up yet)</button><p class="note-text" id="why">'+(DRIVE.configured()?'Google sign-in works only when the site is opened from a web address, not straight from a folder.':'<b>Why it is off:</b> this site has no Google Client ID yet. The site owner creates one for free in Google Cloud Console and pastes it into <b>config.js</b>. The steps are in <b>SETUP-GOOGLE-SIGNIN.md</b>. Until then, your reading is saved in this browser.')+'</p>');
+    body=head('Reading as a guest','Saved in this browser only')+statsHTML()+'<p class="note-text">Accounts are not switched on yet. Your progress, bookmarks, highlights and notes are saved in this browser.</p>';
   }
   openSheet('Reading profile',body);
+}
+
+const field=(id,label,attrs)=>'<label class="authfield" for="'+id+'">'+label+'<input class="field" id="'+id+'" '+attrs+'></label>';
+const pinField=(id,label,auto)=>field(id,label,'type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="'+auto+'" required');
+function authSheet(mode,email){
+  const reg=mode==='register',rec=mode==='recover';
+  const tabs=rec?'':'<div class="seg" role="group" aria-label="Account">'+[['register','Register'],['signin','Sign in']].map(([v,l])=>'<button type="button" data-act="auth" data-v="'+v+'" class="'+(v===mode?'on':'')+'" aria-pressed="'+(v===mode)+'">'+l+'</button>').join('')+'</div>';
+  openSheet(rec?'Choose a new PIN':reg?'Create your account':'Sign in',tabs+
+    '<form id="authform" class="authform" novalidate>'+
+    (reg?field('a-name','Name','type="text" maxlength="60" autocomplete="name"'):'')+
+    field('a-email','Email','type="email" maxlength="254" autocomplete="username" required value="'+esc(email||(account&&account.email)||'')+'"')+
+    (rec?field('a-code','Recovery code','type="text" maxlength="40" autocomplete="off" autocapitalize="characters" spellcheck="false" required'):'')+
+    pinField('a-pin',rec?'New 6-digit PIN':'6-digit PIN',reg||rec?'new-password':'current-password')+
+    (reg||rec?pinField('a-pin2','PIN again','new-password'):'')+
+    '<p class="autherror" id="a-error" role="alert"></p>'+
+    '<button class="btn primary" type="submit" id="a-go">'+(rec?'Save new PIN':reg?'Create account':'Sign in')+'</button></form>'+
+    (mode==='signin'?'<button class="btn small" data-act="auth" data-v="recover">Forgot PIN?</button>':'')+
+    (rec?'<button class="btn small" data-act="auth" data-v="signin">Back to sign in</button>':'')+
+    '<p class="note-text">'+(reg?'Your email, name and reading data (progress, bookmarks, highlights and notes) are stored on this site’s account server, and the site owner can access them. No email is sent to check your address. ':'')+'You can also read without an account.</p>');
+  $('#authform').onsubmit=e=>{e.preventDefault();submitAuth(mode)};
+}
+let authBusy=false;
+async function submitAuth(mode){
+  if(authBusy)return;
+  const val=id=>{const el=$(id);return el?el.value.trim():''},say=m=>{const el=$('#a-error');if(el)el.textContent=m};
+  const email=val('#a-email'),pin=val('#a-pin');
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){say('Enter a valid email address.');return}
+  if(!/^\d{6}$/.test(pin)){say('The PIN must be 6 digits.');return}
+  if(mode!=='signin'&&pin!==val('#a-pin2')){say('The two PINs are not the same.');return}
+  const form=$('#authform'),go=$('#a-go'),label=go.textContent;
+  authBusy=true;go.disabled=true;go.textContent='Please wait…';say('');
+  let result;
+  try{
+    result=mode==='register'?await ACCOUNTS.register(email,pin,val('#a-name')):mode==='recover'?await ACCOUNTS.recover(email,val('#a-code'),pin):await ACCOUNTS.login(email,pin);
+  }catch(e){say(e.message||'That did not work. Please try again.');if(form.isConnected){go.disabled=false;go.textContent=label}return}
+  finally{authBusy=false}
+  const wasGuest=!account,p=result.profile;
+  if(!account||account.sub!==p.sub)switchAccount(p);
+  else{account=p;try{localStorage.setItem(ACCKEY,JSON.stringify(p))}catch(e){}paintMe()}
+  closeSheet();
+  if(result.recoveryCode)codeSheet(result.recoveryCode,wasGuest);
+  else finishSignIn(wasGuest);
+}
+/* the recovery code is shown once, so this window stays until the reader says it is saved */
+let codeWait=null;
+function codeSheet(code,wasGuest){
+  openSheet('Save your recovery code','<p style="margin:0">If you forget your PIN, this code lets you choose a new one. It is shown only now. Write it down or keep it somewhere safe.</p><div class="reccode" id="reccode">'+esc(code)+'</div><div class="row" style="flex-wrap:wrap"><button class="btn" data-act="copycode">Copy code</button><button class="btn primary" data-act="codesaved">I have saved it</button></div>');
+  codeWait={wasGuest};
+}
+async function finishSignIn(wasGuest){
+  const sub=account&&account.sub;
+  await DS.sync();
+  if(!account||account.sub!==sub)return;
+  const guest=readJSON(KEY);
+  if(wasGuest&&guest&&hasContent(guest.t))
+    openSheet('Reading data on this device','<p style="margin:0">This device has reading data saved without sign-in. Move it into the account for <b>'+esc(account.email)+'</b>? Choose this only if it is yours.</p><div class="row" style="flex-wrap:wrap"><button class="btn primary" data-act="moveguest">Move it to my account</button><button class="btn" data-act="close">Leave it on this device</button></div>');
+  else accountSheet();
+}
+function deleteSheet(){
+  openSheet('Delete your account','<p style="margin:0">This permanently deletes your account and its saved reading data from the server, and removes this account’s copy from this device. Enter your PIN to confirm.</p><form id="delform" class="authform" novalidate>'+pinField('d-pin','6-digit PIN','current-password')+'<p class="autherror" id="d-error" role="alert"></p><div class="row" style="flex-wrap:wrap"><button class="btn primary" type="submit">Delete my account</button><button class="btn" type="button" data-act="close">Keep my account</button></div></form>');
+  $('#delform').onsubmit=async e=>{
+    e.preventDefault();
+    const key=dataKey();
+    try{await ACCOUNTS.remove($('#d-pin').value.trim())}
+    catch(x){const el=$('#d-error');if(el)el.textContent=x.message;return}
+    try{localStorage.removeItem(key)}catch(x){}
+    switchAccount(null);closeSheet();toast('Your account was deleted');
+  };
 }
 function switchAccount(next){
   clearTimeout(DS.timer);DS.timer=null;DS.again=false;DS.generation++;DS.state='idle';
@@ -535,21 +620,6 @@ function switchAccount(next){
   loadData();route();
 }
 const hasContent=t=>Object.values(t||{}).some(d=>['done','bm','hl','nt'].some(k=>Object.keys(d[k]||{}).length));
-async function signIn(){
-  let p;
-  try{p=await DRIVE.signIn(account&&account.email)}
-  catch(e){toast(e.code==='scope'?'Allow the Google Drive permission so your progress can be saved.':e.code==='cancelled'?'Sign-in was not completed.':'Google sign-in could not be reached.');return}
-  const wasGuest=!account;
-  if(!account||account.sub!==p.sub)switchAccount(p);
-  else{account=p;try{localStorage.setItem(ACCKEY,JSON.stringify(p))}catch(e){}paintMe()}
-  closeSheet();
-  await DS.sync();
-  if(!account||account.sub!==p.sub)return;
-  const guest=readJSON(KEY);
-  if(wasGuest&&guest&&hasContent(guest.t))
-    openSheet('Reading data on this device','<p style="margin:0">This device has reading data saved without sign-in. Move it into the profile for <b>'+esc(p.email)+'</b>? Choose this only if it is yours.</p><div class="row" style="flex-wrap:wrap"><button class="btn primary" data-act="moveguest">Move it to my profile</button><button class="btn" data-act="close">Leave it on this device</button></div>');
-  else accountSheet();
-}
 function moveGuest(){
   const guest=readJSON(KEY);
   if(!account||!guest)return;
@@ -559,10 +629,10 @@ function moveGuest(){
 }
 async function signOut(wipe){
   if(wipe){
-    if(!await DS.sync()){toast('Not removed. Reconnect and sync first, so nothing is lost.');return}
+    if(!await DS.sync()){toast('Not removed. Sign in again and sync first, so nothing is lost.');return}
     try{localStorage.removeItem(dataKey())}catch(e){}
   }
-  DRIVE.signOut();switchAccount(null);closeSheet();toast(wipe?'Signed out and removed from this device':'Signed out');
+  ACCOUNTS.signOut();switchAccount(null);closeSheet();toast(wipe?'Signed out and removed from this device':'Signed out');
 }
 
 /* ---------- search and saved lists ---------- */
@@ -625,8 +695,8 @@ document.addEventListener('click',e=>{
   const b=e.target.closest('[data-act]');
   if(!b){if(!e.target.closest('.pop')&&$('.pop')&&Date.now()-justSelected>500)closePop();return}
   const act=b.dataset.act,v=b.dataset.v,story=b.closest('article.story'),s=story?+story.dataset.s:null;
-  if(act==='veil'){if(e.target===b)closeSheet();return}
-  if(act==='close')closeSheet();
+  if(act==='veil'){if(e.target===b&&!codeOpen())closeSheet();return}
+  if(act==='close'){if(!codeOpen())closeSheet()}
   else if(act==='done'){
     edit(R.topic.id,d=>{if(d.done[s])delete d.done[s];else d.done[s]=Date.now()});paintStory(s);paintProgress();allLabel();
     if(peek(R.topic.id).done[s])celebrate(b,doneIn(R.topic)===R.topic.n);
@@ -655,7 +725,14 @@ document.addEventListener('click',e=>{
   else if(act==='jump'){const el=storyEl(+v);if(el){el.scrollIntoView({block:'start'});el.classList.remove('flash');void el.offsetWidth;el.classList.add('flash')}}
   else if(act==='goal'){const g=[1,3,5,10];S.set.goal=g[(g.indexOf(dailyGoal())+1)%g.length];saveLocal();const y=window.scrollY;renderHome();window.scrollTo(0,y)}
   else if(act==='account')accountSheet();
-  else if(act==='signin')signIn();
+  else if(act==='auth')authSheet(v,($('#a-email')||{}).value);
+  else if(act==='askdelete')deleteSheet();
+  else if(act==='copycode'){
+    const text=$('#reccode').textContent;
+    const pick=()=>{const r=document.createRange();r.selectNodeContents($('#reccode'));const s=getSelection();s.removeAllRanges();s.addRange(r);toast('Code selected. Copy it now.')};
+    if(navigator.clipboard)navigator.clipboard.writeText(text).then(()=>toast('Code copied'),pick);else pick();
+  }
+  else if(act==='codesaved'){const w=codeWait;codeWait=null;closeSheet();finishSignIn(w&&w.wasGuest)}
   else if(act==='syncnow')DS.sync();
   else if(act==='signout')signOut(false);
   else if(act==='signoutwipe'){if(!b.dataset.sure){b.dataset.sure=1;b.textContent='Tap again to confirm';return}signOut(true)}
@@ -681,12 +758,12 @@ document.addEventListener('click',e=>{
     removeSaved(b.dataset.kind,+b.dataset.t,+b.dataset.s,b.dataset.id);const y=window.scrollY;refresh();window.scrollTo(0,y);
   }
 });
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeSheet();closePop()}});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){if(!codeOpen())closeSheet();closePop()}});
 window.addEventListener('hashchange',route);
 
 window.addEventListener('online',()=>DS.changed(500));
 document.addEventListener('visibilitychange',()=>{if(!account)return;if(document.visibilityState==='visible')DS.changed(500);else if(DS.timer){clearTimeout(DS.timer);DS.timer=null;DS.sync()}});
 /* another tab signed in or out: reload so one profile is never written into another */
 window.addEventListener('storage',e=>{if(e.key===ACCKEY){const now=readJSON(ACCKEY);if(((now&&now.sub)||'')!==((account&&account.sub)||''))location.reload()}});
-applySettings();route();Sync.start();DRIVE.prepare();if(account)DS.sync();
+applySettings();route();Sync.start();if(account)DS.sync();
 })();

@@ -10,9 +10,9 @@ python -m http.server 8765 --bind 127.0.0.1
 
 Then open `http://localhost:8765`.
 
-## Google sign-in
+## Reader accounts
 
-The OAuth Client ID is in `config.js`. A Client ID is public. Never commit a client secret. See `SETUP-GOOGLE-SIGNIN.md`.
+Readers can register with an email and a 6-digit PIN once an account server is connected in `config.js`. See `SETUP-ACCOUNTS.md`. Never commit a secret.
 
 ## Files
 
@@ -21,7 +21,7 @@ The OAuth Client ID is in `config.js`. A Client ID is public. Never commit a cli
 | `index.html` | Page layout and styles |
 | `app.js` | Reading, headings, highlights, notes, bookmarks, search, profiles |
 | `journey.js` | Progress display, daily goal and streak |
-| `cloud.js` | Google sign-in and saving to the reader's Drive app folder |
+| `cloud.js` | Email and PIN accounts, and saving to the account server |
 | `art.js` | Original illustrations |
 | `data/` | The book text and contents |
 
